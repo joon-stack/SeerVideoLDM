@@ -680,8 +680,8 @@ class WindowSTempAttention(CrossAttention):
             mask_w = w
         if self.temporal:
             if self.causal:
-                i, j = query.shape[-2],key.shape[-2]
-                attention_mask = torch.ones((i, j), dtype = torch.bool, device = query.device).tril(j - i)
+                i, j = query_window.shape[-2],key_window.shape[-2]
+                attention_mask = torch.ones((i, j), dtype = torch.bool, device = query_window.device).tril(j - i)
         # attention, what we cannot get enough of
         if self._use_memory_efficient_attention_xformers:
             hidden_states = self._memory_efficient_attention_xformers(query_window, key_window, value_window, attention_mask)
