@@ -125,15 +125,18 @@ def main(args):
     fstext_model.eval()
     
     transform = T.Compose([
-                T.Resize(args.resolution),
-                T.CenterCrop(args.resolution),
+                T.Resize((args.resolution,args.resolution)), #T.CenterCrop(args.resolution),
                 T.ToTensor()
             ])
-    image_path = args.image_path
-    x0_image_val = Image.open(image_path)
-    x0_image_val = transform(x0_image_val).to(accelerator.device)
-    x0_image_val = 2.*x0_image_val - 1.
-    x0_image_val = x0_image_val.unsqueeze(0).unsqueeze(2)
+    image_path_list = (args.image_path).split('|')
+    x0_image_val_list = []
+    for image_path in image_path_list:
+        x0_image = Image.open(image_path)
+        x0_image = transform(x0_image).to(accelerator.device)
+        x0_image = 2.*x0_image - 1.
+        x0_image = x0_image.unsqueeze(0).unsqueeze(2)
+        x0_image_val_list.append(x0_image)
+    x0_image_val = torch.cat(x0_image_val_list,dim=2)
     num_samples = x0_image_val.shape[0]
     cond_tokens_val = [args.input_text_prompts] * num_samples
 
@@ -161,8 +164,8 @@ def main(args):
             attention_mask=cond_input_empty.attention_mask.to(accelerator.device),
     )
     text_empty_emb_val = text_empty_emb_val[0]
-    f2 = args.num_frames-args.cond_frames
-    f1 = args.cond_frames
+    f1 = x0_image_val.shape[2]
+    f2 = args.num_frames-f1
     x0_image_val = x0_image_val.expand(-1,-1,f1,-1,-1)
     x0_image_val = rearrange(x0_image_val, 'b c f h w -> (b f) c h w')
     latents_x0_val = vae.encode(x0_image_val).latent_dist.sample().detach()
@@ -182,7 +185,7 @@ def main(args):
                                         ddim_steps=args.ddim_steps, scale=args.scale, uc=text_empty_emb_val)
 
         save_visualization_onegif(accelerator, vae, x_samples_ddim, x0_image=x0_image_val,\
-                            sample_id=j, image_path=args.image_path, num_sample_rows = 1)
+                            sample_id=j, image_path=(args.image_path).split('|')[0], num_sample_rows = 1)
 
         noise_val = torch.randn((b,c_l,f2,h_l,w_l)).to(latents_x0_val.device)
         

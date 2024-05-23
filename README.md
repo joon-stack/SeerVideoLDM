@@ -116,13 +116,16 @@ To sample a video clip from an indicated image:
 ```
 python inference_img.py \
  --config="./configs/inference_base.yaml" \
- --image_path="./src/figs/{image_name}.jpg" \
+ --image_path="{image_name}.jpg|{sec_img(optional)}.jpg" \
  --input_text_prompts="{your input text}"
 ```
 For Example
 ```
 python inference_img.py\
---config="./configs/inference_base.yaml"\ --image_path="./src/figs/book.jpg"\ --input_text_prompts="close book"
+--config="./configs/inference_base.yaml"\ 
+--image_path="./src/figs/book.jpg"\ OR #one ref. frame
+--image_path="./src/figs/book.jpg|./src/figs/book.jpg"\ #two ref. frame 
+--input_text_prompts="close book"
 ```
 (Hints: We recommend using Sthv2+Bridge [checkpoints](https://huggingface.co/xianfang/SeerVideo/tree/main/sthv2bridge_seer) for improved performance in zero-shot video prediction tasks.)
 
