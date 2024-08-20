@@ -23,6 +23,7 @@ def load_i3d_pretrained(device=torch.device('cpu')):
     i3d = InceptionI3d(400, in_channels=3).to(device)
     #filepath = download(_I3D_PRETRAINED_ID, 'i3d_pretrained_400.pt')
     filepath = os.path.join('store_pth', 'i3d_pretrained_400.pt')
+    filepath = '/home/s2/youngjoonjeong/github/language-based-slot-predictor/SeerVideoLDM/store_pth/i3d_pretrained_400.pt'
     i3d.load_state_dict(torch.load(filepath, map_location=device))
     i3d.eval()
     return i3d

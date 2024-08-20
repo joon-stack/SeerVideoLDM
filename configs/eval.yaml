@@ -1,15 +1,15 @@
 pretrained_model_name_or_path: "runwayml/stable-diffusion-v1-5"
-output_dir: "./outputs/sthv2_seer"
-data_dir: "../mmaction2/data/sthv2"
-dataset: "sthv2" #"bridgedata", "epickitchen"
-resolution: 256
-cond_frames: 2 #sthv2 = (1 or 2), bridgedata = 1, epickitchen = 1
-num_frames: 12 #sthv2 = (12 or 16), bridgedata = 16, epickitchen = (12 or 16)
+output_dir: "/shared/s2/lab01/youngjoonjeong/seer/langtable_ori"
+data_dir: "/shared/s2/lab01/dataset/language-table/language_table_blocktoblock_4block_sim"
+dataset: "language_table" #"bridgedata", "epickitchen"
+resolution: 128
+cond_frames: 6 #sthv2 = (1 or 2), bridgedata = 1, epickitchen = 1
+num_frames: 16 #sthv2 = (12 or 16), bridgedata = 16, epickitchen = (12 or 16)
 
 val_batch_size: 1
-compute_fvd: False
+compute_fvd: True
 MAX_FVD_BATCH: 32
-compute_is: True
+compute_is: False
 MAX_IS_BATCH: 100
 
 seed: 0

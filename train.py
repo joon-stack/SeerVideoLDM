@@ -30,6 +30,8 @@ from tqdm.auto import tqdm
 from transformers import CLIPTextModel, CLIPTokenizer
 from omegaconf import OmegaConf
 
+import wandb
+
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
 logger = get_logger(__name__)
 
@@ -126,13 +128,22 @@ def main(args):
     accelerator = Accelerator(
         mixed_precision=args.mixed_precision,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
-        log_with="tensorboard",
+        log_with="wandb",
         logging_dir=logging_dir,
     )
 
     # If passed along, set the training seed now.
     if args.seed is not None:
         set_seed(args.seed)
+
+    # Init wandb
+    if accelerator.is_main_process:
+        SLURM_JOB_ID = os.environ.get('SLURM_JOB_ID')
+        exp_name = args.dataset
+        logger_name = f'{exp_name}-{SLURM_JOB_ID}'
+        # wandb.init(project='seer',
+        #            dir=logging_dir,
+        #            )
 
     # Handle the repository creation
     if accelerator.is_main_process:
@@ -156,27 +167,33 @@ def main(args):
     losses_train = RunningAverageMeter()
     
     # Load models and create wrapper for stable diffusion
+    cache_dir = '/shared/s2/lab01/youngjoonjeong/huggingface'
+    print("INFO: revision: ", args.revision)
     text_tokenizer = CLIPTokenizer.from_pretrained(
         args.pretrained_model_name_or_path,
         subfolder="tokenizer",
         revision=args.revision,
+        cache_dir=cache_dir,
     )
     text_encoder = CLIPTextModel.from_pretrained(
         args.pretrained_model_name_or_path,
         subfolder="text_encoder",
         revision=args.revision,
+        cache_dir=cache_dir,
     )
     # Load models and create wrapper for stable diffusion
     vae = AutoencoderKL.from_pretrained(
         args.pretrained_model_name_or_path,
         subfolder="vae",
         revision=args.revision,
+        cache_dir=cache_dir,
     )
     sunet = SeerUNet.from_pretrained(
         args.pretrained_model_name_or_path,
         subfolder="unet",
         revision=args.revision,
         low_cpu_mem_usage = False,
+        cache_dir=cache_dir,
     )
     
     
@@ -239,11 +256,13 @@ def main(args):
         from dataset.sthv2 import Dataset
     elif args.dataset == 'epickitchen':
         from dataset.epickitchen import Dataset
+    elif args.dataset == 'language_table':
+        from dataset.language_table import Dataset
     else:
         NotImplementedError
-    ds_train = Dataset(args.data_dir, args.resolution, val_batch_size = args.val_batch_size, channels = 3, num_frames = args.num_frames, split = 'train', normalize = False)
+    ds_train = Dataset(args.data_dir, image_size=args.resolution)
 
-    print(f'found {len(ds_train)} videos as gif files at {args.data_dir}')
+    print(f'found {len(ds_train)} videos as gif files at {ds_train.data_root}')
     assert len(ds_train) > 0, 'need to have at least 1 video to start training (although 1 is not great, try 100k)'
 
     train_dataloader = torch.utils.data.DataLoader(ds_train, batch_size = args.train_batch_size,num_workers=args.num_workers, pin_memory=True, shuffle=True)
@@ -407,6 +426,8 @@ def main(args):
             logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
             progress_bar.set_postfix(**logs)
             accelerator.log(logs, step=global_step)
+            # if accelerator.is_main_process:
+            #     wandb.log(logs, step=global_step)
             if global_step >= args.max_train_steps:
                 break
         accelerator.wait_for_everyone()

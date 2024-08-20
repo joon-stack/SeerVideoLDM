@@ -38,7 +38,7 @@ from transformers import CLIPTextModel, CLIPTokenizer
 from ldm.models.diffusion.ddim_video import DDIMSampler
 from utils.ddim_sampling_utils import ddim_sample, save_visualization
 from omegaconf import OmegaConf
-
+from collections import OrderedDict
 logger = get_logger(__name__)
 
 
@@ -62,28 +62,36 @@ def main(args):
     if args.seed is not None:
         set_seed(args.seed)
 
-    global_step = 0
+    global_step = 20000
     # Load models and create wrapper for stable diffusion
+    cache_dir = '/shared/s2/lab01/youngjoonjeong/huggingface'
+
+    print("INFO: args.revision", args.revision)
+
     text_tokenizer = CLIPTokenizer.from_pretrained(
         args.pretrained_model_name_or_path,
         subfolder="tokenizer",
         revision=args.revision,
+        cache_dir=cache_dir,
     )
     text_encoder = CLIPTextModel.from_pretrained(
         args.pretrained_model_name_or_path,
         subfolder="text_encoder",
         revision=args.revision,
+        cache_dir=cache_dir,
     )
     vae = AutoencoderKL.from_pretrained(
         args.pretrained_model_name_or_path,
         subfolder="vae",
         revision=args.revision,
+        cache_dir=cache_dir,
     )
     sunet = SeerUNet.from_pretrained(
         args.pretrained_model_name_or_path,
         subfolder="unet",
         revision=args.revision,
         low_cpu_mem_usage = False,
+        cache_dir=cache_dir,
     )
     fstext_model = FSTextTransformer(num_frames = 16, num_layers = 8)
     fstext_model.set_numframe(args.num_frames)
@@ -104,9 +112,11 @@ def main(args):
         from dataset.sthv2 import Dataset
     elif args.dataset == 'epickitchen':
         from dataset.epickitchen import Dataset
+    elif args.dataset == 'language_table':
+        from dataset.language_table import Dataset
     else:
         NotImplementedError
-    ds_val = Dataset(args.data_dir, args.resolution, val_batch_size = args.val_batch_size, channels = 3, num_frames = args.num_frames, split = 'val', normalize = False)
+    ds_val = Dataset(args.data_dir, split = 'val', normalize = False, image_size = args.resolution)
 
     print(f'found {len(ds_val)} videos as gif files at {args.data_dir}')
     assert len(ds_val) > 0, 'need to have at least 1 video to start training (although 1 is not great, try 100k)'
@@ -121,11 +131,29 @@ def main(args):
     if os.path.exists(load_path):
         print("loading")
         fstext_state_dict = torch.load(os.path.join(load_path,'pytorch_model_1.bin'), map_location="cpu")
-        msg = fstext_model.load_state_dict(fstext_state_dict, strict=True)
-        print(msg)
+        try:
+            
+            msg = fstext_model.load_state_dict(fstext_state_dict, strict=True)
+            print(msg)
+        except:
+            new_state_dict = OrderedDict()
+            for n, v in fstext_state_dict.items():
+                name = n.replace("module.","") # .module이 중간에 포함된 형태라면 (".module","")로 치환
+                new_state_dict[name] = v
+            msg = fstext_model.load_state_dict(new_state_dict, strict=True)
+            print(msg)
+            
         sunet_state_dict = torch.load(os.path.join(load_path,'pytorch_model.bin'), map_location="cpu")
-        msg = sunet.load_state_dict(sunet_state_dict, strict=True)
-        print(msg)
+        try:
+            msg = sunet.load_state_dict(sunet_state_dict, strict=True)
+            print(msg)
+        except:
+            new_state_dict = OrderedDict()
+            for n, v in sunet_state_dict.items():
+                name = n.replace("module.","") # .module이 중간에 포함된 형태라면 (".module","")로 치환
+                new_state_dict[name] = v
+            msg = sunet_model.load_state_dict(new_state_dict, strict=True)
+            print(msg)
     if os.path.exists(load_path_file):
         print("loading steps")
         state_dict = torch.load(load_path_file)
@@ -151,6 +179,7 @@ def main(args):
     for i_ter in range(args.sample_iter):
         data_val = next(val_iter)
         video_val, input_text_val = data_val
+        print(input_text_val)
 
         cond_input = text_tokenizer(
                     input_text_val,
@@ -176,9 +205,12 @@ def main(args):
                 attention_mask=cond_input_empty.attention_mask.to(accelerator.device),
         )
         text_empty_emb_val = text_empty_emb_val[0]
+        # print("INFO: video_val.shape", video_val.shape)
         
         x0_image_val = video_val[:,:,:args.cond_frames,:,:] #first frame
         images_val = video_val[:,:,args.cond_frames:,:,:] #future frames
+
+        
         b, c, f1, h, w = x0_image_val.shape
         f2 = images_val.shape[2]
         x0_image_val = rearrange(x0_image_val, 'b c f h w -> (b f) c h w')
@@ -195,9 +227,19 @@ def main(args):
         _,c_l,_,h_l,w_l=latents_val.shape
         f = f1+f2
         noise_val = torch.randn((b,c_l,f2,h_l,w_l)).to(latents_val.device)
+
         for j in range(args.num_samples):
             x_samples_ddim = ddim_sample(sampler, sunet, vae, shape=(b,c_l,f2,h_l,w_l), c=text_seq_cond_emb, start_code=noise_val, x0_emb=latents_x0_val,\
                                             ddim_steps=args.ddim_steps, scale=args.scale, uc=text_empty_emb_val)
+
+            for i in range(x_samples_ddim.shape[2]):
+                sample_image = x_samples_ddim[0,:,i]
+                sample_image = np.transpose(sample_image.cpu().numpy(), (1,2,0))
+            
+                sample_image = (sample_image * 2. - 1.).clip(0, 1)
+                sample_image = (sample_image * 255).astype(np.uint8)
+                sample_image = Image.fromarray(sample_image)
+                sample_image.save(f"test_{i_ter * 10 + i}.png")
 
             save_visualization(accelerator, vae, x_samples_ddim, video_latent=latents_val,video=video_val,results_folder=args.output_dir,\
                                 global_step=global_step+i_ter*10+j, num_sample_rows = args.n_rows)

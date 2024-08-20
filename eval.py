@@ -58,6 +58,10 @@ def freeze_params(params):
         param.requires_grad = False
 
 def main(args):
+    import torch.distributed as dist
+
+    dist.init_process_group(backend='nccl')  # 또는 'gloo' 또는 'mpi'
+
     if args.data_dir is None:
         raise ValueError("You must specify a data directory.")
     accelerator = Accelerator(
@@ -70,26 +74,31 @@ def main(args):
 
     global_step = 0
     # Load models and create wrapper for stable diffusion
+    cache_dir = '/shared/s2/lab01/youngjoonjeong/huggingface'
     text_tokenizer = CLIPTokenizer.from_pretrained(
         args.pretrained_model_name_or_path,
         subfolder="tokenizer",
         revision=args.revision,
+        cache_dir=cache_dir,
     )
     text_encoder = CLIPTextModel.from_pretrained(
         args.pretrained_model_name_or_path,
         subfolder="text_encoder",
         revision=args.revision,
+        cache_dir=cache_dir,
     )
     vae = AutoencoderKL.from_pretrained(
         args.pretrained_model_name_or_path,
         subfolder="vae",
         revision=args.revision,
+        cache_dir=cache_dir,
     )
     sunet = SeerUNet.from_pretrained(
         args.pretrained_model_name_or_path,
         subfolder="unet",
         revision=args.revision,
         low_cpu_mem_usage = False,
+        cache_dir=cache_dir,
     )
     fstext_model = FSTextTransformer(num_frames = 16, num_layers = 8)
     fstext_model.set_numframe(args.num_frames)
@@ -110,9 +119,11 @@ def main(args):
         from dataset.sthv2 import Dataset
     elif args.dataset == 'epickitchen':
         from dataset.epickitchen import Dataset
+    elif args.dataset == 'language_table':
+        from dataset.language_table import Dataset
     else:
         NotImplementedError
-    ds_val = Dataset(args.data_dir, args.resolution, val_batch_size = args.val_batch_size, channels = 3, num_frames = args.num_frames, split = 'val', normalize = False)
+    ds_val = Dataset(args.data_dir, split = 'val', normalize = False, image_size = args.resolution)
 
     print(f'found {len(ds_val)} videos as gif files at {args.data_dir}')
     assert len(ds_val) > 0, 'need to have at least 1 video to start training (although 1 is not great, try 100k)'
@@ -154,20 +165,20 @@ def main(args):
     fstext_model.eval()
 
     from utils.compute_fvd import eval_video_fvd, inception_score
-    if args.compute_fvd:  
-        from utils.download import load_i3d_pretrained
-        i3d = load_i3d_pretrained(accelerator.device)
-        fvds = []
-        fake_embeddings_stack = []
-        real_embeddings_stack = []
-    if args.compute_is:  
-        import chainer
-        from utils.models import c3d
-        #import torch.distributed as dist
-        #rank = dist.get_rank()
-        #c3d = c3d.C3DVersion1UCF101(pretrained_model='auto', mean_path='store_pth/mean2.npz') #.to_gpu(device=rank)
-        c3d = c3d.C3DVersion1UCF101(pretrained_model='store_pth/conv3d_deepnetA_ucf.npz', mean_path='store_pth/mean2.npz')
-        y_score_stack = []
+    # if args.compute_fvd:  
+    from utils.download import load_i3d_pretrained
+    i3d = load_i3d_pretrained(accelerator.device)
+    fvds = []
+    fake_embeddings_stack = []
+    real_embeddings_stack = []
+    # if args.compute_is:  
+    #     import chainer
+    #     from utils.models import c3d
+    #     #import torch.distributed as dist
+    #     #rank = dist.get_rank()
+    #     #c3d = c3d.C3DVersion1UCF101(pretrained_model='auto', mean_path='store_pth/mean2.npz') #.to_gpu(device=rank)
+    #     c3d = c3d.C3DVersion1UCF101(pretrained_model='store_pth/conv3d_deepnetA_ucf.npz', mean_path='store_pth/mean2.npz')
+    #     y_score_stack = []
     pred_stack = []
     gt_stack = []
     pbar = tqdm(total=len(val_dl))
@@ -203,12 +214,14 @@ def main(args):
         images_val = video_val[:,:,args.cond_frames:,:,:] #future frames
         b, c, f1, h, w = x0_image_val.shape
         f2 = images_val.shape[2]
+
         x0_image_val = rearrange(x0_image_val, 'b c f h w -> (b f) c h w')
         images_val = rearrange(images_val, 'b c f h w -> (b f) c h w')
         latents_val = vae.encode(images_val).latent_dist.sample().detach()
         latents_x0_val = vae.encode(x0_image_val).latent_dist.sample().detach()
         latents_val = latents_val * 0.18215
         latents_x0_val = latents_x0_val * 0.18215
+
         latents_x0_val = rearrange(latents_x0_val, '(b f) c h w -> b c f h w', f=f1)
         latents_val = rearrange(latents_val, '(b f) c h w -> b c f h w', f=f2)
 
@@ -224,35 +237,37 @@ def main(args):
         
         gt_out = (video_val  + 1.0) / 2.0
         gt_out = concat_all_gather(accelerator,gt_out.contiguous()).cpu()
+        # gt_out = gt_out[:, :, args.cond_frames:, :, :]
 
         x0_image_val = (x0_image_val  + 1.0) / 2.0
         x0_image_val = rearrange(x0_image_val, '(n f) c h w -> n c f h w', f = f1)
+        x0_image_val = x0_image_val.reshape(b,3,f1,h,w)
         pred_out = torch.cat([x0_image_val,pred_out],dim=2)
         pred_out = concat_all_gather(accelerator,pred_out.contiguous()).cpu()
         pred_stack.append(pred_out)
         gt_stack.append(gt_out)
         pred_out_stack_tensor = torch.cat(pred_stack,dim=0)
         pbar.update(1)
-        if args.compute_fvd and (pred_out_stack_tensor.shape[0] == args.MAX_FVD_BATCH or i==(len(val_dl)-1)):
+        if (pred_out_stack_tensor.shape[0] == args.MAX_FVD_BATCH or i==(len(val_dl)-1)):
             gt_stack_tensor = torch.cat(gt_stack,dim=0)
             fvd,kvd,fake_embeddings_stack, real_embeddings_stack = eval_video_fvd(accelerator, i3d, pred_out_stack_tensor, gt_stack_tensor,\
                     fake_embeddings_stack, real_embeddings_stack)
-            pbar.set_description(f"FVD {fvd:.2f}, KVD {kvd:.2f}")
+            pbar.set_description(f"FVD {fvd:.2f}, KVD {kvd:.4f}")
             gt_stack = []
             pred_stack = []
-        if args.compute_is and (pred_out_stack_tensor.shape[0] == args.MAX_IS_BATCH or i==(len(val_dl)-1)):
-            samples = pred_out_stack_tensor.cpu().numpy()
-            is_mean, is_std, y_score_stack = inception_score(c3d, samples, y_score_stack)
-            pbar.set_description(f"IS {is_mean:.2f} +-  {is_std:.2f}")
-            gt_stack = []
-            pred_stack = []
+        # if args.compute_is and (pred_out_stack_tensor.shape[0] == args.MAX_IS_BATCH or i==(len(val_dl)-1)):
+        #     samples = pred_out_stack_tensor.cpu().numpy()
+        #     is_mean, is_std, y_score_stack = inception_score(c3d, samples, y_score_stack)
+        #     pbar.set_description(f"IS {is_mean:.2f} +-  {is_std:.2f}")
+        #     gt_stack = []
+        #     pred_stack = []
 
-    if args.compute_fvd:
-        print(f"Final FVD {fvd:.2f}, KVD {kvd:.2f}")
-        pbar.close()
-    elif args.compute_is:
-        print(f"Final IS {is_mean:.2f} +-  {is_std:.2f}")
-        pbar.close()
+    # if args.compute_fvd:
+    print(f"Final FVD {fvd:.2f}, KVD {kvd:.4f}")
+        # pbar.close()
+    # elif args.compute_is:
+        # print(f"Final IS {is_mean:.2f} +-  {is_std:.2f}")
+        # pbar.close()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

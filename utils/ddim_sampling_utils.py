@@ -49,13 +49,13 @@ def save_visualization(accelerator, vae, x_samples_ddim, video_latent, video, re
     video_latent = 1 / 0.18215 * video_latent 
     video_recon = vae.decode(video_latent).sample
     video_recon = rearrange(video_recon, '(n f) c h w -> n c f h w', f = f)
-    video_recon = (video_recon + 1.0) / 2.0
+    # video_recon = (video_recon + 1.0) / 2.0
 
     f0 = video.shape[2] - f
     ori_videos_tensor = video[:,:,f0:,:,:]
     ori_videos_cond_tensor = video[:,:,:f0,:,:]
-    ori_videos_tensor = (ori_videos_tensor + 1.0) / 2.0
-    ori_videos_cond_tensor = (ori_videos_cond_tensor + 1.0) / 2.0
+    # ori_videos_tensor = (ori_videos_tensor + 1.0) / 2.0
+    # ori_videos_cond_tensor = (ori_videos_cond_tensor + 1.0) / 2.0
 
     all_videos_tensor = F.pad(concat_all_gather(accelerator,x_samples_ddim.contiguous()), (2, 2, 2, 2))
     recon_videos_tensor = F.pad(concat_all_gather(accelerator,video_recon.contiguous()), (2, 2, 2, 2))
@@ -63,6 +63,8 @@ def save_visualization(accelerator, vae, x_samples_ddim, video_latent, video, re
     ori_videos_cond_tensor = F.pad(concat_all_gather(accelerator,ori_videos_cond_tensor.contiguous()), (2, 2, 2, 2))
 
     one_gif = rearrange(all_videos_tensor, '(i j) c f h w -> c f (i h) (j w)', i = num_sample_rows)
+
+    all_videos_tensor = all_videos_tensor * 2. - 1.
     one_gif_ori = rearrange(ori_videos_tensor, '(i j) c f h w -> c f (i h) (j w)', i = num_sample_rows)
     one_gif = (one_gif.permute(1, 2, 3, 0).cpu().numpy()*255).astype('uint8')
     one_gif_ori = (one_gif_ori.permute(1, 2, 3, 0).cpu().numpy()*255).astype('uint8')
